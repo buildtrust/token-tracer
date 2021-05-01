@@ -20,6 +20,8 @@ func ConnectDatabase() error {
 	}
 	db.AutoMigrate(
 		&Block{},
+		&Address{},
+		&Transfer{},
 	)
 
 	return nil

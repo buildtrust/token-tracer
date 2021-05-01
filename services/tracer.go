@@ -2,10 +2,9 @@ package services
 
 import (
 	"context"
-	"encoding/hex"
-	"fmt"
 	"log"
 	"math/big"
+	"strings"
 	"time"
 
 	"github.com/buildtrust/token-tracer/config"
@@ -64,6 +63,10 @@ func (t *Tracer) Trace() {
 	go func() {
 		for {
 			tip := <-t.tipChan
+			if t.lastTip.Height == tip.Height {
+				continue
+			}
+			log.Printf("trace log: %d -> %d\n", t.lastTip.Height, tip.Height)
 			query := ethereum.FilterQuery{
 				FromBlock: new(big.Int).SetUint64(t.lastTip.Height),
 				ToBlock:   new(big.Int).SetUint64(tip.Height),
@@ -74,18 +77,65 @@ func (t *Tracer) Trace() {
 				log.Fatalf("can't filter logs: %v", err)
 			}
 			for _, l := range logs {
-				fmt.Println(l.Topics[0].String())
 				// Transfer
 				if l.Topics[0].String() == "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef" {
-					from := "0x" + hex.EncodeToString(l.Topics[1][:])
-					fmt.Println(from)
+					from := strings.ToLower(common.BytesToAddress(common.TrimLeftZeroes(l.Topics[1][:])).String())
+					to := strings.ToLower(common.BytesToAddress(common.TrimLeftZeroes(l.Topics[2][:])).String())
+					data := new(big.Int).SetBytes(l.Data)
+					trace := false
+					if config.GetConfig().ContainAddress(from) {
+						trace = true
+						addr := dao.Address{
+							Parent:     from,
+							Address:    to,
+							Generation: 1,
+						}
+						if err := addr.Save(dao.DB()); err != nil {
+							log.Fatalf("save address error: %v", err)
+						}
+					}
+					if !trace {
+						addr, err := dao.NewAddress().FindByAddress(from)
+						if err != nil {
+							log.Fatalf("query address error: %v", err)
+						}
+						if addr != nil && addr.Generation < 3 {
+							trace = true
+							addr := dao.Address{
+								Parent:     addr.Address,
+								Address:    to,
+								Generation: addr.Generation + 1,
+							}
+							if err := addr.Save(dao.DB()); err != nil {
+								log.Fatalf("save address error: %v", err)
+							}
+						}
+					}
+					if trace {
+						transfer := &dao.Transfer{
+							Height: l.BlockNumber,
+							Hash:   l.TxHash.String(),
+							From:   from,
+							To:     to,
+							Amount: data.String(),
+						}
+						if err := transfer.Save(dao.DB()); err != nil {
+							log.Fatalf("save transfer error: %v", err)
+						}
+					}
 				}
 			}
 			t.lastTip = &Tip{
 				Height: tip.Height,
 				Hash:   tip.Hash,
 			}
-			// TODO save last
+			block := &dao.Block{
+				LastHeight: tip.Height,
+				LastHash:   tip.Hash,
+			}
+			if err := block.Save(dao.DB()); err != nil {
+				log.Fatalf("save block error: %v", err)
+			}
 		}
 	}()
 	go func() {
@@ -95,8 +145,8 @@ func (t *Tracer) Trace() {
 		}
 		for {
 			nextHeight := blockNumber
-			if blockNumber-t.lastTip.Height > 100 {
-				nextHeight = t.lastTip.Height + 100
+			if blockNumber-t.lastTip.Height > 1000 {
+				nextHeight = t.lastTip.Height + 1000
 			}
 			nextHeader, err := t.client.HeaderByNumber(context.Background(), new(big.Int).SetUint64(config.GetConfig().StartBlock))
 			if err != nil {

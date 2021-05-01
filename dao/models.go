@@ -1,6 +1,8 @@
 package dao
 
-import "gorm.io/gorm"
+import (
+	"gorm.io/gorm"
+)
 
 type Block struct {
 	gorm.Model
@@ -21,7 +23,7 @@ func (t *Block) Save(tx *gorm.DB) error {
 	if count == 0 {
 		return tx.Create(&t).Error
 	}
-	return tx.Updates(&t).Error
+	return tx.Where("1 = 1").Updates(&t).Error
 }
 
 func (t *Block) Get() (*Block, error) {
@@ -43,6 +45,10 @@ type Address struct {
 	Generation uint
 }
 
+func NewAddress() *Address {
+	return &Address{}
+}
+
 func (t *Address) Save(tx *gorm.DB) error {
 	var count int64
 	if err := tx.Model(&Address{}).Where("`address` = ?", t.Address).Count(&count).Error; err != nil {
@@ -54,13 +60,34 @@ func (t *Address) Save(tx *gorm.DB) error {
 	return tx.Create(&t).Error
 }
 
-func (t *Address) FindByAddress(tx *gorm.DB) (*Address, error) {
+func (t *Address) FindByAddress(addr string) (*Address, error) {
 	var result Address
-	if err := tx.Model(&Address{}).Where("`address` = ?", t.Address).First(&result).Error; err != nil {
+	if err := DB().Model(&Address{}).Where("`address` = ?", addr).First(&result).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, nil
 		}
 		return nil, err
 	}
 	return &result, nil
+}
+
+type Transfer struct {
+	gorm.Model
+
+	Height uint64
+	Hash   string `gorm:"type:char(66)"`
+	From   string `gorm:"type:varchar(42)"`
+	To     string `gorm:"type:varchar(42)"`
+	Amount string `gorm:"type:varchar(50)"`
+}
+
+func (t *Transfer) Save(tx *gorm.DB) error {
+	var count int64
+	if err := tx.Model(&Transfer{}).Where("`hash` = ?", t.Hash).Count(&count).Error; err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil
+	}
+	return tx.Create(&t).Error
 }
